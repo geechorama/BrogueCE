@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
 #include <signal.h>
@@ -6,8 +7,38 @@
 #include "platform.h"
 #include "term.h"
 
+// --- g10s fork: hangup-save on SSH disconnect -------------------------------
+// The terminal build is served over SSH (charmbracelet/wish). When the client
+// disconnects, the wish server SIGHUPs the process group. Stock Brogue installs
+// no SIGHUP handler, so the game would be killed with no save (and the input
+// loop below would busy-spin until then). We install a handler that mirrors the
+// SDL window-close path (sdl2-platform.c: on SDL_QUIT it calls
+// quitImmediately() then exit()): on hangup we save the in-progress game and
+// exit cleanly, so the player can "Continue saved game" on reconnect.
+//
+// The signal handler only sets a flag (async-signal-safe). The actual save runs
+// from the input/pause polling path -- never from the handler itself -- so it
+// always happens at a recording boundary (between input events), which is what
+// keeps the resulting .broguesave reloadable. See quitOnHangup().
+static volatile sig_atomic_t hangupReceived = 0;
+
+static void handleHangup(int sig) {
+    (void) sig;
+    hangupReceived = 1;
+}
+
+// Save the in-progress game (or recording) and exit, reusing Brogue's own
+// "close without prompts" path. Called only from the input boundary in
+// curses_nextKeyOrMouseEvent, so the recording is consistent. Does not return.
+static void quitOnHangup(void) {
+    int statusCode = quitImmediately();
+    exit(statusCode);
+}
+// ---------------------------------------------------------------------------
+
 static void gameLoop() {
     signal(SIGINT, SIG_DFL); // keep SDL from overriding the default ^C handler when it's linked
+    signal(SIGHUP, handleHangup); // g10s fork: hangup-save on SSH disconnect (see quitOnHangup)
 
     if (!Term.start()) {
         return;
@@ -132,6 +163,11 @@ static boolean curses_pauseForMilliseconds(short milliseconds, PauseBehavior beh
     Term.refresh();
     _delayUpTo(milliseconds);
 
+    if (hangupReceived) {
+        // Break out of animations / auto-actions (travel, rest, ...) so control
+        // reaches the input loop, which performs the hangup-save and exits.
+        return true;
+    }
     // hasKey returns true if we have a mouse event, too.
     return Term.hasKey();
 }
@@ -144,6 +180,10 @@ static void curses_nextKeyOrMouseEvent(rogueEvent *returnEvent, boolean textInpu
     Term.refresh();
 
     for (;;) {
+        if (hangupReceived) {
+            quitOnHangup(); // SSH disconnect: save the game and exit (does not return)
+        }
+
         /*if (TCOD_console_is_window_closed()) {
             rogue.gameHasEnded = true; // causes the game loop to terminate quickly
             returnEvent->eventType = KEYSTROKE;
