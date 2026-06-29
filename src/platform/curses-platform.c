@@ -164,7 +164,7 @@ static void _delayUpTo(short ms) {
         Term.wait((int)remaining);
     } // else delaying further would go past the time we want to delay until
 
-    lastDelayTime = curTime;
+    lastDelayTime = getTime();
 }
 
 static boolean curses_pauseForMilliseconds(short milliseconds, PauseBehavior behavior) {
