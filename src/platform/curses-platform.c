@@ -146,17 +146,25 @@ static uint64_t getTime() {
 
 static long lastDelayTime = 0;
 
-// Like SDL_Delay, but reduces the delay if time has passed since the last delay
+// Like SDL_Delay, but reduces the delay if time has passed since the last delay.
+//
+// g10s fork: compute the remaining delay in `long`, and treat the first call
+// (lastDelayTime == 0) as "no time elapsed". Upstream subtracted the elapsed
+// time straight into the `short` parameter `ms`; on the very first call
+// lastDelayTime is still 0, so timeDiff was the entire epoch-milliseconds value
+// (~1.78e12) and the subtraction wrapped `ms` to an arbitrary value up to
+// 32767 ms. That hung the title screen for up to ~32s on startup, intermittently
+// (the wrapped value depends on the wall-clock time of the call).
 static void _delayUpTo(short ms) {
     long curTime = getTime();
-    long timeDiff = curTime - lastDelayTime;
-    ms -= timeDiff;
+    long timeDiff = (lastDelayTime == 0) ? 0 : (curTime - lastDelayTime);
+    long remaining = (long)ms - timeDiff;
 
-    if (ms > 0) {
-        Term.wait(ms);
+    if (remaining > 0) {
+        Term.wait((int)remaining);
     } // else delaying further would go past the time we want to delay until
 
-    lastDelayTime = getTime();
+    lastDelayTime = curTime;
 }
 
 static boolean curses_pauseForMilliseconds(short milliseconds, PauseBehavior behavior) {
