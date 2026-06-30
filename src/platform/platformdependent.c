@@ -21,6 +21,13 @@
  *  along with Brogue.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+// The terminal build compiles with -std=c99, under which glibc hides POSIX
+// additions exposed through ISO headers (notably fileno() in <stdio.h>) behind
+// a feature-test macro. The shared global high-score code below uses fileno(),
+// so request the usual POSIX/BSD declarations explicitly. (macOS libc exposes
+// these regardless, which is why a local clang build doesn't catch this.)
+#define _DEFAULT_SOURCE
+
 #include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
