@@ -367,7 +367,12 @@ static void initializeFlyoutMenu(buttonState *menu, screenDisplayBuffer *shadowB
 
         buttonCount = 4;
         initializeMainMenuButton(&(buttons[0]), "  New %sS%seeded Game  ", 's', 'S', NG_NEW_GAME_WITH_SEED);
-        initializeMainMenuButton(&(buttons[1]), "     %sL%soad Game     ", 'l', 'L', NG_OPEN_GAME);
+        if (singleSaveMode) {
+            // g10s fork: one save slot — "Continue" loads it directly, no browser.
+            initializeMainMenuButton(&(buttons[1]), "     %sC%sontinue      ", 'c', 'C', NG_OPEN_GAME);
+        } else {
+            initializeMainMenuButton(&(buttons[1]), "     %sL%soad Game     ", 'l', 'L', NG_OPEN_GAME);
+        }
         initializeMainMenuButton(&(buttons[2]), "  Change V%sa%sriant   ", 'a', 'A', NG_GAME_VARIANT);
         initializeMainMenuButton(&(buttons[3]), "   Change %sM%sode     ", 'm', 'M', NG_GAME_MODE);
 
@@ -1135,6 +1140,18 @@ void mainBrogueJunction() {
                 break;
             case NG_NEW_GAME:
             case NG_NEW_GAME_WITH_SEED:
+                if (singleSaveMode) {
+                    // g10s fork: one save slot. Starting a new game abandons any
+                    // game in progress, so confirm, then delete the old save.
+                    char savePath[BROGUE_FILENAME_MAX];
+                    snprintf(savePath, BROGUE_FILENAME_MAX, "%s%s", SINGLE_SAVE_NAME, GAME_SUFFIX);
+                    if (fileExists(savePath)
+                        && !confirm("Starting a new game will abandon your saved game in progress. Continue?", true)) {
+                        rogue.nextGame = NG_NOTHING;
+                        break;
+                    }
+                    remove(savePath);
+                }
                 rogue.nextGamePath[0] = '\0';
                 randomNumbersGenerated = 0;
 
@@ -1190,6 +1207,9 @@ void mainBrogueJunction() {
                     strcpy(path, rogue.nextGamePath);
                     strcpy(rogue.currentGamePath, rogue.nextGamePath);
                     rogue.nextGamePath[0] = '\0';
+                } else if (singleSaveMode) {
+                    // g10s fork: continue the single save slot directly (no browser).
+                    snprintf(path, BROGUE_FILENAME_MAX, "%s%s", SINGLE_SAVE_NAME, GAME_SUFFIX);
                 } else {
                     dialogChooseFile(path, GAME_SUFFIX, "Open saved game:");
                     //chooseFile(path, "Open saved game: ", "Saved game", GAME_SUFFIX);
@@ -1200,8 +1220,8 @@ void mainBrogueJunction() {
                         mainInputLoop();
                     }
                     freeEverything();
-                } else {
-                    //dialogAlert("File not found.");
+                } else if (singleSaveMode) {
+                    dialogAlert("No saved game.");
                 }
                 rogue.playbackMode = false;
                 rogue.playbackOOS = false;

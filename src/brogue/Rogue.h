@@ -104,6 +104,7 @@ typedef long long fixpt;
 
 // recording and save filenames
 #define LAST_GAME_NAME          "LastGame"
+#define SINGLE_SAVE_NAME        "Game"          // g10s fork: the one slot under --single-save (must differ from LAST_GAME_NAME)
 #define LAST_RECORDING_NAME     "LastRecording"
 #define RECORDING_SUFFIX        ".broguerec"
 #define GAME_SUFFIX             ".broguesave"
@@ -2856,6 +2857,7 @@ typedef struct archivedMessage {
 
 extern boolean serverMode;
 extern boolean nonInteractivePlayback;
+extern boolean singleSaveMode; // g10s fork: --single-save (one save slot, consumed on load)
 extern boolean hasGraphics;
 extern enum graphicsModes graphicsMode;
 

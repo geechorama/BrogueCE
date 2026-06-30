@@ -12,6 +12,7 @@ struct brogueConsole currentConsole;
 char dataDirectory[BROGUE_FILENAME_MAX] = STRINGIFY(DATADIR);
 boolean serverMode = false;
 boolean nonInteractivePlayback = false;
+boolean singleSaveMode = false; // g10s fork: one save slot, consumed on load (NetHack-style); see --single-save
 boolean hasGraphics = false;
 enum graphicsModes graphicsMode = TEXT_GRAPHICS;
 boolean isCsvFormat = false;
@@ -40,6 +41,7 @@ static void printCommandlineHelp() {
     "--term         -t          run in ncurses-based terminal mode\n"
 #endif
     "--variant variant_name     run a variant game (options: rapid_brogue, bullet_brogue)\n"
+    "--single-save              one save slot; loading consumes it (no save-scumming)\n"
     "--stealth      -S          display stealth range\n"
     "--no-effects   -E          disable color effects\n"
     "--wizard       -W          run in wizard mode, invincible with powerful items\n"
@@ -297,6 +299,12 @@ int main(int argc, char *argv[])
             continue;
         }
 #endif
+
+        if (strcmp(argv[i], "--single-save") == 0) {
+            // g10s fork: limit the player to a single save slot, NetHack-style.
+            singleSaveMode = true;
+            continue;
+        }
 
         if (strcmp(argv[i], "--stealth") == 0 || strcmp(argv[i], "-S") == 0) {
             rogue.displayStealthRangeMode = true;

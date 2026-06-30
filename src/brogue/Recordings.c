@@ -1166,6 +1166,19 @@ void saveGameNoPrompt() {
     if (rogue.playbackMode) {
         return;
     }
+    if (singleSaveMode) {
+        // g10s fork: one fixed save slot, overwriting any existing save so saves
+        // never accumulate. (Loading still consumes it; see switchToPlaying.)
+        snprintf(filePath, BROGUE_FILENAME_MAX, "%s%s", SINGLE_SAVE_NAME, GAME_SUFFIX);
+        flushBufferToFile();
+        remove(filePath);
+        rename(currentFilePath, filePath);
+        strcpy(currentFilePath, filePath);
+        rogue.gameHasEnded = true;
+        rogue.gameExitStatusCode = EXIT_STATUS_SUCCESS;
+        rogue.recording = false;
+        return;
+    }
     getDefaultFilePath(defaultPath, false);
     getAvailableFilePath(filePath, defaultPath, GAME_SUFFIX);
     flushBufferToFile();
@@ -1184,6 +1197,13 @@ void saveGame() {
 
     if (rogue.playbackMode) {
         return; // Call me paranoid, but I'd rather it be impossible to embed malware in a recording.
+    }
+
+    if (singleSaveMode) {
+        // g10s fork: no filename prompt — save into the single fixed slot and exit.
+        saveGameNoPrompt();
+        message("Saved.", REQUIRE_ACKNOWLEDGMENT);
+        return;
     }
 
     getDefaultFilePath(defaultPath, false);
