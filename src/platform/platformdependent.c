@@ -23,10 +23,14 @@
 
 #include <ctype.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <fcntl.h>
+#include <unistd.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <sys/file.h>
 #include <dirent.h>
 
 #include "platform.h"
@@ -445,9 +449,172 @@ short getHighScoresList(rogueHighScoresEntry returnList[HIGH_SCORES_COUNT]) {
     return mostRecentLineNumber;
 }
 
+// g10s fork: shared global high-score leaderboard ---------------------------
+// The terminal build is served to several players over SSH; each runs in their
+// own directory, so the stock per-user score files never see each other. These
+// helpers maintain ONE shared file (named by $BROGUE_GLOBAL_SCORES) holding
+// every finished game tagged with the player's nick ($AUTH_NICK), so the game
+// can show a cross-player leaderboard. Everything here is a no-op when
+// BROGUE_GLOBAL_SCORES is unset, so upstream/local-dev builds are unaffected.
+
+// Copy src->dst making it safe for one tab-separated field: tab/newline/CR
+// become spaces, other control bytes (including Brogue's COLOR_ESCAPE, 25) are
+// dropped, and the result is truncated to maxLen chars. dst must hold maxLen+1.
+static void sanitizeTSVField(char *dst, const char *src, int maxLen) {
+    int j = 0;
+    for (int i = 0; src[i] != '\0' && j < maxLen; i++) {
+        unsigned char c = (unsigned char) src[i];
+        if (c == '\t' || c == '\n' || c == '\r') {
+            c = ' ';
+        } else if (c < 0x20) {
+            continue;
+        }
+        dst[j++] = (char) c;
+    }
+    dst[j] = '\0';
+}
+
+// Append one finished game to the shared leaderboard. Multi-writer-safe: every
+// player's process runs as the same uid in one pod on a local volume, so
+// O_APPEND + flock(LOCK_EX) gives an atomic single-line append. Never errors
+// out of the game: score I/O must not interrupt play.
+// Line format: score \t epoch \t nick \t description \n
+static void appendGlobalHighScore(const rogueHighScoresEntry *theEntry) {
+    const char *path = getenv("BROGUE_GLOBAL_SCORES");
+    const char *rawNick;
+    char nick[GLOBAL_NICK_MAX + 1];
+    char desc[DCOLS];
+    char line[64 + GLOBAL_NICK_MAX + DCOLS];
+    int fd, n;
+
+    if (path == NULL || path[0] == '\0') {
+        return; // feature off
+    }
+
+    rawNick = getenv("AUTH_NICK");
+    if (rawNick == NULL || rawNick[0] == '\0') {
+        rawNick = "anon";
+    }
+    sanitizeTSVField(nick, rawNick, GLOBAL_NICK_MAX);
+    sanitizeTSVField(desc, theEntry->description, DCOLS - 1);
+
+    fd = open(path, O_WRONLY | O_APPEND | O_CREAT, 0664);
+    if (fd < 0) {
+        return;
+    }
+    if (flock(fd, LOCK_EX) == 0) {
+        n = snprintf(line, sizeof(line), "%li\t%li\t%s\t%s\n",
+                     theEntry->score, (long) time(NULL), nick, desc);
+        if (n > 0) {
+            if (n >= (int) sizeof(line)) {
+                n = (int) sizeof(line) - 1; // snprintf truncated; write what fit
+            }
+            ssize_t written = write(fd, line, (size_t) n);
+            (void) written;
+        }
+        flock(fd, LOCK_UN);
+    }
+    close(fd);
+}
+
+// Read the shared leaderboard named by $BROGUE_GLOBAL_SCORES into returnList,
+// keeping the top HIGH_SCORES_COUNT by score and sorting them descending.
+// Returns the number of valid entries (0 if the feature is off or the file is
+// absent/empty). Scans the whole file but holds only the running top-N, so
+// memory is bounded no matter how large the file grows.
+short getGlobalHighScoresList(globalHighScoresEntry returnList[HIGH_SCORES_COUNT]) {
+    short i, j, count = 0;
+    const char *path;
+    FILE *f;
+    char line[1024];
+    time_t rawtime;
+
+    for (i = 0; i < HIGH_SCORES_COUNT; i++) {
+        returnList[i].score = 0;
+        returnList[i].date[0] = '\0';
+        returnList[i].nick[0] = '\0';
+        returnList[i].description[0] = '\0';
+    }
+
+    path = getenv("BROGUE_GLOBAL_SCORES");
+    if (path == NULL || path[0] == '\0') {
+        return 0;
+    }
+    f = fopen(path, "r");
+    if (f == NULL) {
+        return 0;
+    }
+    flock(fileno(f), LOCK_SH);
+
+    while (fgets(line, sizeof(line), f) != NULL) {
+        char *tab1, *tab2, *tab3, *nick, *desc;
+        long score, epoch;
+        short slot;
+
+        tab1 = strchr(line, '\t'); if (tab1 == NULL) continue; *tab1++ = '\0';
+        tab2 = strchr(tab1, '\t'); if (tab2 == NULL) continue; *tab2++ = '\0';
+        tab3 = strchr(tab2, '\t'); if (tab3 == NULL) continue; *tab3++ = '\0';
+        score = strtol(line, NULL, 10);
+        epoch = strtol(tab1, NULL, 10);
+        nick = tab2;
+        desc = tab3;
+        for (j = (short) strlen(desc) - 1; j >= 0 && (desc[j] == '\n' || desc[j] == '\r'); j--) {
+            desc[j] = '\0';
+        }
+
+        if (count < HIGH_SCORES_COUNT) {
+            slot = count++;
+        } else {
+            short minIdx = 0;
+            for (j = 1; j < HIGH_SCORES_COUNT; j++) {
+                if (returnList[j].score < returnList[minIdx].score) {
+                    minIdx = j;
+                }
+            }
+            if (score <= returnList[minIdx].score) {
+                continue;
+            }
+            slot = minIdx;
+        }
+        returnList[slot].score = score;
+        strncpy(returnList[slot].nick, nick, GLOBAL_NICK_MAX);
+        returnList[slot].nick[GLOBAL_NICK_MAX] = '\0';
+        strncpy(returnList[slot].description, desc, DCOLS - 1);
+        returnList[slot].description[DCOLS - 1] = '\0';
+        rawtime = (time_t) epoch;
+        strftime(returnList[slot].date, 100, DATE_FORMAT, localtime(&rawtime));
+    }
+
+    flock(fileno(f), LOCK_UN);
+    fclose(f);
+
+    // selection sort, descending by score (same idiom as sortScoreBuffer)
+    for (i = 0; i < count; i++) {
+        short maxIdx = i;
+        for (j = i + 1; j < count; j++) {
+            if (returnList[j].score > returnList[maxIdx].score) {
+                maxIdx = j;
+            }
+        }
+        if (maxIdx != i) {
+            globalHighScoresEntry tmp = returnList[i];
+            returnList[i] = returnList[maxIdx];
+            returnList[maxIdx] = tmp;
+        }
+    }
+
+    return count;
+}
+// ---------------------------------------------------------------------------
+
 boolean saveHighScore(rogueHighScoresEntry theEntry) {
     short i, lowestScoreIndex = -1;
     long lowestScore = -1;
+
+    // g10s fork: record every finished game on the shared global leaderboard,
+    // even ones that miss this player's local top-30 (the global board has its
+    // own ranking across all players). Must run before the early-return below.
+    appendGlobalHighScore(&theEntry);
 
     loadScoreBuffer();
 

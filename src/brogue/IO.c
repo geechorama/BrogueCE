@@ -4275,11 +4275,45 @@ void printDiscoveriesScreen() {
     restoreDisplayBuffer(&rbuf);
 }
 
-void printHighScores(boolean hiliteMostRecent) {
+// g10s fork: the high-scores screen can show either this player's local board
+// or the shared cross-player global board, toggled with a key. Each renderer
+// draws its board and runs its own acknowledgment loop, returning HS_TOGGLE if
+// the player asked to switch boards or HS_DONE to dismiss. printHighScores()
+// (unchanged signature) drives the two so every existing caller — death,
+// victory, and the title menu — gets the toggle for free.
+enum highScoresAction { HS_DONE = 0, HS_TOGGLE };
+
+// Acknowledgment loop shared by both boards. Returns HS_TOGGLE when the player
+// presses the board-switch key (toggleKey / its uppercase), HS_DONE on
+// space/escape/click, and immediately (HS_DONE) during playback/autoplay so the
+// screen never blocks a recording — matching waitForAcknowledgment().
+static enum highScoresAction highScoresAcknowledgment(int toggleKey, int toggleKeyUpper) {
+    rogueEvent theEvent;
+
+    if (rogue.autoPlayingLevel || (rogue.playbackMode && !rogue.playbackOOS) || nonInteractivePlayback) {
+        return HS_DONE;
+    }
+
+    do {
+        nextBrogueEvent(&theEvent, false, false, false);
+        if (theEvent.eventType == KEYSTROKE
+            && (theEvent.param1 == toggleKey || theEvent.param1 == toggleKeyUpper)) {
+            return HS_TOGGLE;
+        }
+        if (theEvent.eventType == KEYSTROKE && theEvent.param1 != ACKNOWLEDGE_KEY && theEvent.param1 != ESCAPE_KEY) {
+            flashTemporaryAlert(" -- Press space or click to continue -- ", 500);
+        }
+    } while (!(theEvent.eventType == KEYSTROKE && (theEvent.param1 == ACKNOWLEDGE_KEY || theEvent.param1 == ESCAPE_KEY)
+               || theEvent.eventType == MOUSE_UP));
+    return HS_DONE;
+}
+
+static enum highScoresAction renderLocalHighScores(boolean hiliteMostRecent) {
     short i, hiliteLineNum, maxLength = 0, leftOffset;
     rogueHighScoresEntry list[HIGH_SCORES_COUNT] = {{0}};
     char buf[DCOLS*3];
     color scoreColor;
+    const char *footer;
 
     hiliteLineNum = getHighScoresList(list);
 
@@ -4328,12 +4362,92 @@ void printHighScores(boolean hiliteMostRecent) {
     scoreColor = black;
     applyColorAverage(&scoreColor, &goodMessageColor, 100);
 
-    printString(KEYBOARD_LABELS ? "Press space to continue." : "Touch anywhere to continue.",
-                (COLS - strLenWithoutEscapes(KEYBOARD_LABELS ? "Press space to continue." : "Touch anywhere to continue.")) / 2,
-                ROWS - 1, &scoreColor, &black, 0);
+    footer = KEYBOARD_LABELS ? "Press space to continue, or (g) for global scores." : "Touch anywhere to continue.";
+    printString(footer, (COLS - strLenWithoutEscapes(footer)) / 2, ROWS - 1, &scoreColor, &black, 0);
 
     commitDraws();
-    waitForAcknowledgment();
+    return highScoresAcknowledgment('g', 'G');
+}
+
+static enum highScoresAction renderGlobalHighScores(void) {
+    short i, maxLength = 0, leftOffset, count;
+    globalHighScoresEntry list[HIGH_SCORES_COUNT] = {{0}};
+    char buf[DCOLS*3];
+    color scoreColor;
+    const char *footer;
+
+    count = getGlobalHighScoresList(list);
+
+    blackOutScreen();
+
+    scoreColor = black;
+    applyColorAverage(&scoreColor, &itemMessageColor, 100);
+    printString("-- GLOBAL HIGH SCORES --", (COLS - 24 + 1) / 2, 0, &scoreColor, &black, 0);
+
+    if (count <= 0) {
+        scoreColor = black;
+        applyColorAverage(&scoreColor, &white, 100);
+        printString("No global scores yet.", (COLS - 21) / 2, 2, &scoreColor, &black, 0);
+    } else {
+        for (i = 0; i < count; i++) {
+            if (strLenWithoutEscapes(list[i].description) > maxLength) {
+                maxLength = strLenWithoutEscapes(list[i].description);
+            }
+        }
+
+        // description sits at leftOffset+40 (rank+0, score+5, date+12, nick+23)
+        leftOffset = min(COLS - maxLength - 40 - 1, COLS/8);
+        if (leftOffset < 0) {
+            leftOffset = 0;
+        }
+
+        for (i = 0; i < count; i++) {
+            scoreColor = black;
+            applyColorAverage(&scoreColor, &white, 100);
+            applyColorAverage(&scoreColor, &black, (i * 50 / 24));
+
+            // rank
+            sprintf(buf, "%s%i)", (i + 1 < 10 ? " " : ""), i + 1);
+            printString(buf, leftOffset, i + 2, &scoreColor, &black, 0);
+
+            // score
+            sprintf(buf, "%li", list[i].score);
+            printString(buf, leftOffset + 5, i + 2, &scoreColor, &black, 0);
+
+            // date
+            printString(list[i].date, leftOffset + 12, i + 2, &scoreColor, &black, 0);
+
+            // nick
+            printString(list[i].nick, leftOffset + 23, i + 2, &scoreColor, &black, 0);
+
+            // description
+            printString(list[i].description, leftOffset + 40, i + 2, &scoreColor, &black, 0);
+        }
+    }
+
+    scoreColor = black;
+    applyColorAverage(&scoreColor, &goodMessageColor, 100);
+
+    footer = KEYBOARD_LABELS ? "Press space to continue, or (l) for your local scores." : "Touch anywhere to continue.";
+    printString(footer, (COLS - strLenWithoutEscapes(footer)) / 2, ROWS - 1, &scoreColor, &black, 0);
+
+    commitDraws();
+    return highScoresAcknowledgment('l', 'L');
+}
+
+void printHighScores(boolean hiliteMostRecent) {
+    boolean showGlobal = false;
+
+    for (;;) {
+        enum highScoresAction action = showGlobal
+            ? renderGlobalHighScores()
+            : renderLocalHighScores(hiliteMostRecent);
+        if (action == HS_TOGGLE) {
+            showGlobal = !showGlobal;
+            continue;
+        }
+        break;
+    }
 }
 
 void displayGrid(short **map) {

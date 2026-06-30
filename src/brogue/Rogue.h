@@ -382,6 +382,17 @@ typedef struct rogueHighScoresEntry {
     char description[DCOLS];
 } rogueHighScoresEntry;
 
+// g10s fork: one row of the shared, cross-player global leaderboard. Unlike
+// rogueHighScoresEntry it carries the player's nick (the per-user files have no
+// notion of "who", since each lives in one player's directory).
+#define GLOBAL_NICK_MAX 16
+typedef struct globalHighScoresEntry {
+    signed long score;
+    char date[100];
+    char nick[GLOBAL_NICK_MAX + 1];
+    char description[DCOLS];
+} globalHighScoresEntry;
+
 typedef struct rogueRun {
     uint64_t seed;
     long dateNumber;
@@ -2959,6 +2970,7 @@ extern "C" {
     boolean controlKeyIsDown(void);
     boolean shiftKeyIsDown(void);
     short getHighScoresList(rogueHighScoresEntry returnList[HIGH_SCORES_COUNT]);
+    short getGlobalHighScoresList(globalHighScoresEntry returnList[HIGH_SCORES_COUNT]);
     boolean saveHighScore(rogueHighScoresEntry theEntry);
     void saveRunHistory(char *result, char *killedBy, int score, int lumenstones);
     void saveResetRun(void);
